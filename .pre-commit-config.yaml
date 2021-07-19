@@ -5,7 +5,7 @@ default_stages: [commit, manual]
 
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v2.2.3
+    rev: v4.0.1
     hooks:
       - id: trailing-whitespace
       - id: end-of-file-fixer
@@ -16,7 +16,7 @@ repos:
       - id: check-merge-conflict # Check for files that contain merge conflict strings.
       - id: debug-statements # Check for debugger imports and py37+ `breakpoint()` calls in python source.
   - repo: https://github.com/psf/black
-    rev: 19.10b0
+    rev: 21.7b0
     hooks:
       - id: black
   - repo: local
