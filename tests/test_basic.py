@@ -1,12 +1,13 @@
 import numpy as np
 import pytest
+from scipy import sparse
 from sklearn.base import BaseEstimator, RegressorMixin, clone
 from sklearn.ensemble import HistGradientBoostingRegressor
 from sklearn.linear_model import Ridge
 from sklearn.tree import DecisionTreeRegressor
 
 from ngboost import NGBClassifier, NGBRegressor, NGBSurvival
-from ngboost.distns import Bernoulli, Normal, k_categorical
+from ngboost.distns import Bernoulli, MultivariateNormal, Normal, k_categorical
 
 
 class RecordingRegressor(BaseEstimator, RegressorMixin):
@@ -351,3 +352,113 @@ def test_feature_importances_are_none_for_mixed_base_learners():
     ).fit(X, Y)
 
     assert ngb.feature_importances_ is None
+
+
+def test_n_jobs_is_a_supported_param():
+    ngb = NGBRegressor(n_jobs=4, verbose=False)
+    assert ngb.get_params()["n_jobs"] == 4
+    assert clone(ngb).get_params()["n_jobs"] == 4
+
+
+def test_parallel_tree_fits_match_serial():
+    rng = np.random.default_rng(0)
+    X = rng.normal(size=(200, 5))
+    W = rng.normal(size=(5, 3))
+    Y = X @ W + 0.1 * rng.normal(size=(200, 3))
+
+    kw = {
+        "Dist": MultivariateNormal(3),
+        "Base": DecisionTreeRegressor(max_depth=3, random_state=0),
+        "n_estimators": 10,
+        "verbose": False,
+    }
+    serial = NGBRegressor(n_jobs=1, **kw).fit(X, Y)
+    parallel = NGBRegressor(n_jobs=-1, **kw).fit(X, Y)
+
+    np.testing.assert_allclose(serial.pred_param(X), parallel.pred_param(X))
+
+
+def test_parallel_matches_serial_default_random_state():
+    # With the model random_state set, per learner seeding makes the default
+    # random_state=None base learner reproducible and independent of n_jobs.
+    rng = np.random.default_rng(3)
+    X = rng.normal(size=(200, 5))
+    W = rng.normal(size=(5, 3))
+    Y = X @ W + 0.1 * rng.normal(size=(200, 3))
+
+    kw = {"Dist": MultivariateNormal(3), "n_estimators": 10, "verbose": False}
+    serial = NGBRegressor(random_state=0, n_jobs=1, **kw).fit(X, Y)
+    parallel = NGBRegressor(random_state=0, n_jobs=-1, **kw).fit(X, Y)
+
+    np.testing.assert_allclose(serial.pred_param(X), parallel.pred_param(X))
+
+
+def test_parallel_matches_serial_sparse_float32_csc():
+    # A float32 CSC matrix with unsorted indices is the exact input where a
+    # threaded in place sort_indices could race across the per parameter fits.
+    # fit_base canonicalizes the shared matrix once first, so parallel must
+    # still match serial. Repeat a few times to make a regression obvious.
+    rng = np.random.default_rng(0)
+    Xd = rng.normal(size=(300, 8)).astype(np.float32)
+    Xd[Xd < 0.6] = 0.0
+    Y = rng.integers(0, 6, size=300)
+
+    def make_X():
+        X = sparse.csc_matrix(Xd)
+        X.sort_indices()
+        for j in range(X.shape[1]):
+            s, e = X.indptr[j], X.indptr[j + 1]
+            if e - s > 1:
+                perm = rng.permutation(e - s)
+                X.indices[s:e] = X.indices[s:e][perm]
+                X.data[s:e] = X.data[s:e][perm]
+        X.has_sorted_indices = False
+        return X
+
+    kw = {
+        "Dist": k_categorical(6),
+        "Base": DecisionTreeRegressor(max_depth=3, random_state=0),
+        "n_estimators": 8,
+        "verbose": False,
+    }
+    ref = NGBClassifier(n_jobs=1, **kw).fit(make_X(), Y).pred_param(Xd)
+    for _ in range(5):
+        got = NGBClassifier(n_jobs=-1, **kw).fit(make_X(), Y).pred_param(Xd)
+        np.testing.assert_allclose(got, ref)
+
+
+def test_parallel_matches_serial_multiclass():
+    rng = np.random.default_rng(1)
+    X = rng.normal(size=(150, 4))
+    Y = np.argmax(np.column_stack([X[:, 0], X[:, 1], -X[:, 0] - X[:, 1]]), axis=1)
+
+    kw = {
+        "Dist": k_categorical(3),
+        "Base": DecisionTreeRegressor(max_depth=2, random_state=0),
+        "n_estimators": 10,
+        "verbose": False,
+    }
+    serial = NGBClassifier(n_jobs=1, **kw).fit(X, Y)
+    parallel = NGBClassifier(n_jobs=-1, **kw).fit(X, Y)
+
+    np.testing.assert_allclose(serial.predict_proba(X), parallel.predict_proba(X))
+
+
+def test_parallel_matches_serial_with_missing_values():
+    # With a fixed random_state on the base learner, parallel fitting stays
+    # deterministic and matches serial even on the missing value path, which
+    # otherwise races on numpy's global random state under threads.
+    rng = np.random.default_rng(2)
+    X = rng.normal(size=(200, 5))
+    X[rng.random(X.shape) < 0.1] = np.nan
+    Y = rng.normal(size=200)
+
+    kw = {
+        "Base": DecisionTreeRegressor(max_depth=3, random_state=0),
+        "n_estimators": 10,
+        "verbose": False,
+    }
+    serial = NGBRegressor(n_jobs=1, **kw).fit(X, Y)
+    parallel = NGBRegressor(n_jobs=-1, **kw).fit(X, Y)
+
+    np.testing.assert_allclose(serial.pred_param(X), parallel.pred_param(X))

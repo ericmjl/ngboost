@@ -5,6 +5,8 @@
 # pylint: disable=unused-variable,invalid-unary-operand-type,attribute-defined-outside-init
 # pylint: disable=redundant-keyword-arg,protected-access,unnecessary-lambda-assignment
 import numpy as np
+from joblib import Parallel, delayed
+from scipy.sparse import issparse
 from sklearn.base import clone
 from sklearn.model_selection import train_test_split
 from sklearn.tree import DecisionTreeRegressor
@@ -53,6 +55,18 @@ class NGBoost:
                                     loss has to increase before the algorithm stops early.
                                     Set to None to disable early stopping and validation.
                                     None enables running over the full data set.
+        n_jobs            : number of joblib threads used to fit the per parameter
+                            base learners in parallel on each boosting round. None
+                            or 1 (the default) fits them serially. A value above 1,
+                            or ``-1`` for all cores, speeds up fitting when the
+                            distribution has many parameters, such as a high
+                            dimensional MultivariateNormal or classification with
+                            many classes; on small problems the thread overhead can
+                            make it slower instead. Threads are used so the shared
+                            data is not copied per worker; when nesting inside an
+                            outer parallel job keep the product of the thread counts
+                            near the core count. The fitted model does not depend on
+                            n_jobs.
 
 
     Output:
@@ -76,6 +90,7 @@ class NGBoost:
         random_state=None,
         validation_fraction=0.1,
         early_stopping_rounds=None,
+        n_jobs=None,
     ):
         self.Dist = Dist
         self.Score = Score
@@ -98,6 +113,7 @@ class NGBoost:
         self.best_val_loss_itr = None
         self.validation_fraction = validation_fraction
         self.early_stopping_rounds = early_stopping_rounds
+        self.n_jobs = n_jobs
 
         if hasattr(self.Dist, "multi_output"):
             self.multi_output = self.Dist.multi_output
@@ -189,13 +205,43 @@ class NGBoost:
 
     def fit_base(self, X, grads, sample_weight=None):
         base_learners = self._base_learners()
-        if sample_weight is None:
-            models = [clone(base).fit(X, g) for base, g in zip(base_learners, grads.T)]
-        else:
+        # Seed only the base learners that have no random_state of their own,
+        # drawing from self.random_state in this single thread so serial and
+        # parallel fits agree. Learners that already fix their own randomness are
+        # left untouched, so their RNG stream is not perturbed (this mirrors how
+        # scikit learn's forests seed their sub estimators).
+        seeds = [
+            (
+                int(self.random_state.randint(np.iinfo(np.int32).max))
+                if base.get_params().get("random_state", "set") is None
+                else None
+            )
+            for base in base_learners
+        ]
+
+        def _fit_one(base, g, seed):
+            learner = clone(base)
+            if seed is not None:
+                learner.set_params(random_state=seed)
+            if sample_weight is None:
+                return learner.fit(X, g)
+            return learner.fit(X, g, sample_weight=sample_weight)
+
+        if self.n_jobs in (None, 1):
             models = [
-                clone(base).fit(X, g, sample_weight=sample_weight)
-                for base, g in zip(base_learners, grads.T)
+                _fit_one(base, g, seed)
+                for base, g, seed in zip(base_learners, grads.T, seeds)
             ]
+        else:
+            if issparse(X) and X.format in ("csr", "csc", "bsr"):
+                # Canonicalize once so the threaded fits do not race on an in
+                # place sort_indices of this shared matrix. Only the compressed
+                # formats have sortable indices; sklearn copies the rest.
+                X.sort_indices()
+            models = Parallel(n_jobs=self.n_jobs, backend="threading")(
+                delayed(_fit_one)(base, g, seed)
+                for base, g, seed in zip(base_learners, grads.T, seeds)
+            )
         fitted = np.array([m.predict(X) for m in models]).T
         self.base_models.append(models)
         return fitted
@@ -592,6 +638,7 @@ class NGBoost:
             "random_state": self.random_state,
             "validation_fraction": self.validation_fraction,
             "early_stopping_rounds": self.early_stopping_rounds,
+            "n_jobs": self.n_jobs,
         }
 
         if not deep:

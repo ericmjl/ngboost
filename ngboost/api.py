@@ -57,12 +57,13 @@ class NGBRegressor(NGBoost, BaseEstimator):
                                     loss has to increase before the algorithm stops early.
                                     Set to None to disable early stopping and validation.
                                     None enables running over the full data set.
+        n_jobs            : see the ``NGBoost`` base class.
 
     Output:
         An NGBRegressor object that can be fit.
     """
 
-    # pylint: disable=too-many-positional-arguments
+    # pylint: disable=too-many-positional-arguments,too-many-locals
     def __init__(
         self,
         Dist=Normal,
@@ -79,6 +80,7 @@ class NGBRegressor(NGBoost, BaseEstimator):
         random_state=None,
         validation_fraction=0.1,
         early_stopping_rounds=None,
+        n_jobs=None,
     ):
         assert issubclass(
             Dist, RegressionDistn
@@ -104,6 +106,7 @@ class NGBRegressor(NGBoost, BaseEstimator):
             random_state,
             validation_fraction,
             early_stopping_rounds,
+            n_jobs,
         )
 
         self._estimator_type = "regressor"
@@ -160,11 +163,12 @@ class NGBClassifier(NGBoost, BaseEstimator):
                                     loss has to increase before the algorithm stops early.
                                     Set to None to disable early stopping and validation.
                                     None enables running over the full data set.
+        n_jobs            : see the ``NGBoost`` base class.
     Output:
         An NGBClassifier object that can be fit.
     """
 
-    # pylint: disable=too-many-positional-arguments
+    # pylint: disable=too-many-positional-arguments,too-many-locals
     def __init__(
         self,
         Dist=Bernoulli,
@@ -181,6 +185,7 @@ class NGBClassifier(NGBoost, BaseEstimator):
         random_state=None,
         validation_fraction=0.1,
         early_stopping_rounds=None,
+        n_jobs=None,
     ):
         assert issubclass(
             Dist, ClassificationDistn
@@ -200,6 +205,7 @@ class NGBClassifier(NGBoost, BaseEstimator):
             random_state,
             validation_fraction,
             early_stopping_rounds,
+            n_jobs,
         )
         self._estimator_type = "classifier"
 
@@ -271,6 +277,7 @@ class NGBSurvival(NGBoost, BaseEstimator):
                                     loss has to increase before the algorithm stops early.
                                     Set to None to disable early stopping and validation.
                                     None enables running over the full data set.
+        n_jobs            : see the ``NGBoost`` base class.
     Output:
         An NGBSurvival object that can be fit.
     """
@@ -292,6 +299,7 @@ class NGBSurvival(NGBoost, BaseEstimator):
         random_state=None,
         validation_fraction=0.1,
         early_stopping_rounds=None,
+        n_jobs=None,
     ):
 
         assert issubclass(
@@ -320,6 +328,7 @@ class NGBSurvival(NGBoost, BaseEstimator):
             random_state,
             validation_fraction,
             early_stopping_rounds,
+            n_jobs,
         )
 
     def __getstate__(self):
